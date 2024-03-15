@@ -1,14 +1,14 @@
 # -*- coding: utf-8 -*-
 """
 @author:XuMing(xuming624@qq.com)
-@description:
-
-modified from https://github.com/tloen/alpaca-lora/blob/main/finetune.py
+@description: Multi round conversation SFT model
 """
 import math
 import os
 import random
-from typing import List, Tuple, Optional
+from threading import Thread
+from types import MethodType
+from typing import List, Tuple, Optional, Union
 
 import numpy as np
 import torch
@@ -18,36 +18,38 @@ from peft import (
     LoraConfig,
     TaskType,
     PeftModel,
-    prepare_model_for_int8_training,
+    prepare_model_for_kbit_training,
     set_peft_model_state_dict,
 )
 from tqdm import tqdm
 from transformers import (
     AutoConfig,
     LlamaForCausalLM,
-    LlamaTokenizerFast,
+    LlamaTokenizer,
     BloomTokenizerFast,
     BloomForCausalLM,
     AutoModelForCausalLM,
     AutoTokenizer,
+    AutoModel,
     Trainer,
     TrainingArguments,
-    GenerationConfig,
+    TextIteratorStreamer,
     DataCollatorForSeq2Seq,
     BitsAndBytesConfig,
-    deepspeed,
 )
+from transformers.deepspeed import is_deepspeed_zero3_enabled
 from transformers.trainer import TRAINING_ARGS_NAME
 
 from textgen.config.model_args import GptArgs
-from textgen.gpt.gpt_utils import InstructionDataset, PROMPT_DICT
+from textgen.gpt.gpt_utils import GptSupervisedDataset, IGNORE_INDEX, get_conv_template
 
 has_cuda = torch.cuda.is_available()
 os.environ["TOKENIZERS_PARALLELISM"] = "FALSE"
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
 MODEL_CLASSES = {
-    "llama": (AutoConfig, LlamaForCausalLM, LlamaTokenizerFast),
+    "llama": (AutoConfig, LlamaForCausalLM, LlamaTokenizer),
+    "chatglm": (AutoConfig, AutoModel, AutoTokenizer),
     "bloom": (AutoConfig, BloomForCausalLM, BloomTokenizerFast),
     "baichuan": (AutoConfig, AutoModelForCausalLM, AutoTokenizer),
     "auto": (AutoConfig, AutoModelForCausalLM, AutoTokenizer),
@@ -117,25 +119,53 @@ class GptModel:
         if not use_cuda:
             self.args.fp16 = False
             self.args.int8 = False
-        world_size = int(os.environ.get("WORLD_SIZE", 1))
-        self.ddp = world_size != 1
+        self.world_size = int(os.environ.get("WORLD_SIZE", 1))
+        self.local_rank = int(os.environ.get("LOCAL_RANK", 0))
+        self.ddp = self.world_size != 1
         if self.ddp:
-            self.device_map = {"": int(os.environ.get("LOCAL_RANK") or 0)}
+            self.device_map = {"": self.local_rank}
 
         self.results = {}
         config_class, model_class, tokenizer_class = MODEL_CLASSES[model_type]
         if model_name is None:
             model_name = self.args.model_name_or_path
 
-        if torch.cuda.is_available() and torch.cuda.is_bf16_supported() and not self.args.bf16:
-            logger.warning("GPU supports bf16, you can enable bf16.")
+        if self.args.bf16:
+            self.args.fp16 = False
+        if self.args.fp16:
+            self.args.bf16 = False
         self.torch_dtype = torch.bfloat16 if self.args.bf16 else (torch.float16 if self.args.fp16 else torch.float32)
-        self.config = config_class.from_pretrained(model_name, trust_remote_code=self.args.trust_remote_code, **kwargs)
+        self.config = config_class.from_pretrained(
+            model_name,
+            trust_remote_code=self.args.trust_remote_code,
+            torch_dtype=self.torch_dtype,
+            **kwargs
+        )
+        self.tokenizer_class = tokenizer_class
+        if self.args.tokenizer_name:
+            self.tokenizer = tokenizer_class.from_pretrained(
+                self.args.tokenizer_name, trust_remote_code=self.args.trust_remote_code)
+        else:
+            self.tokenizer = tokenizer_class.from_pretrained(
+                model_name, trust_remote_code=self.args.trust_remote_code)
+            self.args.tokenizer_name = self.args.model_name
+        if self.tokenizer.eos_token_id is None:
+            self.tokenizer.eos_token = "</s>"  # eos token is required for SFT
+            logger.debug("Add eos token: {}".format(self.tokenizer.eos_token))
+        if self.tokenizer.pad_token_id is None:
+            if self.tokenizer.unk_token_id is not None:
+                self.tokenizer.pad_token = self.tokenizer.unk_token
+            else:
+                self.tokenizer.pad_token = self.tokenizer.eos_token
+            logger.debug("Add pad token: {}".format(self.tokenizer.pad_token))
+        # Load model
         self.model = model_class.from_pretrained(
             model_name,
             config=self.config,
             load_in_8bit=self.args.int8,
+            load_in_4bit=self.args.int4,
             torch_dtype=self.torch_dtype,
+            low_cpu_mem_usage=(not is_deepspeed_zero3_enabled()),
             device_map=self.device_map,
             trust_remote_code=self.args.trust_remote_code,
             quantization_config=BitsAndBytesConfig(
@@ -145,15 +175,21 @@ class GptModel:
                 bnb_4bit_compute_dtype=self.torch_dtype,
             ) if self.args.qlora else None,
         )
+        # Set NEFTune trick for fine-tuning
+        if self.args.neft_alpha > 0:
+            input_embed = self.model.get_input_embeddings()
+            if isinstance(input_embed, torch.nn.Embedding):
+                def noisy_forward(self: torch.nn.Embedding, x: torch.Tensor) -> torch.Tensor:
+                    embeddings = input_embed.__class__.forward(self, x)
+                    dims = self.num_embeddings * self.embedding_dim
+                    mag_norm = self.args.neft_alpha / (dims ** 0.5)
+                    embeddings += torch.zeros_like(embeddings).uniform_(-mag_norm, mag_norm)
+                    return embeddings
 
-        self.tokenizer_class = tokenizer_class
-        if self.args.tokenizer_name:
-            self.tokenizer = tokenizer_class.from_pretrained(
-                self.args.tokenizer_name, trust_remote_code=self.args.trust_remote_code)
-        else:
-            self.tokenizer = tokenizer_class.from_pretrained(
-                model_name, trust_remote_code=self.args.trust_remote_code)
-            self.args.tokenizer_name = self.args.model_name
+                input_embed.forward = MethodType(noisy_forward, input_embed)
+                logger.info("Using noisy embedding with alpha={:.2f}".format(self.args.neft_alpha))
+            else:
+                logger.warning("Input embeddings are not normal nn.Embedding, cannot transform into noisy embedding.")
 
         self.args.model_type = model_type
         if model_name is None:
@@ -163,21 +199,14 @@ class GptModel:
 
         self.peft_name = peft_name
         if self.args.use_peft and self.peft_name:
-            self.load_peft_model()
-        # Set padding side equal to Collator padding side
-        self.tokenizer.padding_side = "left"
-        if self.tokenizer.pad_token_id is None:
-            self.tokenizer.pad_token_id = 0
-
-    def load_peft_model(self):
-        """Load peft model"""
-        self.model = PeftModel.from_pretrained(
-            self.model,
-            self.peft_name,
-            torch_dtype=self.torch_dtype,
-            device_map=self.device_map,
-        )
-        logger.info(f"Loaded peft model from {self.peft_name}")
+            """Load peft model"""
+            self.model = PeftModel.from_pretrained(
+                self.model,
+                self.peft_name,
+                torch_dtype=self.torch_dtype,
+                device_map=self.device_map,
+            )
+            logger.info(f"Loaded peft model from {self.peft_name}")
 
     def find_all_linear_names(self, int4=False, int8=False):
         cls = torch.nn.Linear
@@ -192,6 +221,8 @@ class GptModel:
             if isinstance(module, cls):
                 # last layer is not add to lora_module_names
                 if 'lm_head' in name:
+                    continue
+                if 'output_layer' in name:
                     continue
                 names = name.split('.')
                 lora_module_names.add(names[0] if len(names) == 1 else names[-1])
@@ -210,10 +241,8 @@ class GptModel:
         Trains the model using 'train_data'
 
         Args:
-            train_data: Pandas DataFrame containing the 3 columns - `instruction`, `input`, `output`.
-                        - `instruction`: The instruction text. (E.g. `"correct the following:"`)
-                        - `input`: The input text sequence. `instruction` is automatically prepended to form the full input. (<instruction> `\n` <input>)
-                        - `output`: The target sequence
+            train_data: json file path or Pandas DataFrame containing 1 columns - `conversations`.
+                format: {"conversations":[{"from":"human","value":"Mike的妈妈有4个孩子; 其中3个是 Luis、Drake 和 Matilda。 第4个孩子叫什么？"},{"from":"gpt","value":"Mike。"}]}
             output_dir: The directory where model files will be saved. If not given, self.args.output_dir will be used.
             args (optional): Optional changes to the args dict of the model. Any changes made will persist for the model.
             eval_data (optional): A DataFrame against which evaluation will be performed when evaluate_during_training is enabled. Is required if evaluate_during_training is enabled.
@@ -278,12 +307,15 @@ class GptModel:
             **kwargs
         )
         resume_from_checkpoint = self.args.resume_from_checkpoint
-        if self.args.qlora and (len(training_args.fsdp) > 0 or deepspeed.is_deepspeed_zero3_enabled()):
+        if self.args.qlora and (len(training_args.fsdp) > 0 or is_deepspeed_zero3_enabled()):
             logger.warning("FSDP and ZeRO3 are both currently incompatible with QLoRA.")
         if 'all' in self.args.lora_target_modules:
             self.args.lora_target_modules = self.find_all_linear_names(self.args.int4, self.args.int8)
         # setup peft
         if self.args.use_peft:
+            if self.args.int8 or self.args.int4:
+                self.model = prepare_model_for_kbit_training(self.model, self.args.gradient_checkpointing)
+
             peft_type = self.args.peft_type.upper()
             logger.info(f"Using PEFT type: {peft_type}")
             # add peft config
@@ -353,13 +385,13 @@ class GptModel:
                     bias=self.args.lora_bias,
                 )
 
-            if self.args.int8:
-                self.model = prepare_model_for_int8_training(self.model)
-
             if isinstance(self.model, PeftModel):
                 logger.debug("Merge peft weights to base model")
                 self.model = self.model.merge_and_unload()
             self.model = get_peft_model(self.model, peft_config)
+            # Set data type to float32
+            for param in filter(lambda p: p.requires_grad, self.model.parameters()):
+                param.data = param.data.to(torch.float32)
 
             if resume_from_checkpoint:
                 # Check the available weights and load them
@@ -377,19 +409,24 @@ class GptModel:
                     set_peft_model_state_dict(self.model, adapters_weights)
                 else:
                     logger.warning(f"Checkpoint {checkpoint_name} not found")
+                    resume_from_checkpoint = None
 
             self.model.print_trainable_parameters()  # Be more transparent about the % of trainable params.
         else:
-            logger.warning("Now full model params fine-tune, which is slow, set `use_peft=True` for lora fine-tune.")
+            logger.info("Fine-tuning method: Full parameters training")
+            self.model = self.model.float()
         os.makedirs(output_dir, exist_ok=True)
         logger.debug(f"Tokenizer: {self.tokenizer}")
-        logger.debug(f"Model: {self.model}")
 
         # load dataset
         train_dataset = self.load_and_cache_examples(train_data)
         if verbose:
             logger.debug(f"train_dataset len: {len(train_dataset)}, train_dataset[0]: {train_dataset[0]}")
-            logger.debug(f"text of train_dataset[0]: {self.tokenizer.decode(train_dataset[0]['input_ids'])}")
+            logger.debug("Tokenized training example:")
+            logger.debug(f"Decode input_ids[0]: {self.tokenizer.decode(train_dataset[0]['input_ids'])}")
+            replaced_labels = [label if label != IGNORE_INDEX else self.tokenizer.pad_token_id
+                               for label in list(train_dataset[0]['labels'])]
+            logger.debug(f"Decode labels[0]: {self.tokenizer.decode(replaced_labels)}")
         eval_dataset = None
         if eval_data is not None:
             eval_dataset = self.load_and_cache_examples(eval_data, evaluate=True)
@@ -411,18 +448,13 @@ class GptModel:
         else:
             self.model.config.use_cache = True
         self.model.enable_input_require_grads()
-        if torch.cuda.is_available() and torch.cuda.device_count() > 1:
+        if not self.ddp and torch.cuda.device_count() > 1:
             # keeps Trainer from trying its own DataParallelism when more than 1 gpu is available
             self.model.is_parallelizable = True
             self.model.model_parallel = True
 
         # Initialize our Trainer
-        data_collator = DataCollatorForSeq2Seq(
-            self.tokenizer,
-            return_tensors="pt",
-            padding="max_length",
-            max_length=self.args.max_seq_length + self.args.max_length
-        )
+        data_collator = DataCollatorForSeq2Seq(self.tokenizer, label_pad_token_id=IGNORE_INDEX)
 
         if self.args.use_peft:
             trainer = SavePeftModelTrainer(
@@ -449,13 +481,15 @@ class GptModel:
         logger.debug(f"Train dataloader example: {sample}")
         logger.debug(f"Detail input_ids: {sample['input_ids'][:3]}, \nlabels: {sample['labels'][:3]}")
         logger.debug(f"Decode input_ids[0]: {self.tokenizer.decode(sample['input_ids'][0])}")
-        replaced_labels = [label if label != -100 else self.tokenizer.pad_token_id for label in sample['labels'][0]]
+        replaced_labels = [label if label != IGNORE_INDEX else
+                           self.tokenizer.pad_token_id for label in sample['labels'][0]]
         logger.debug(f"Decode labels[0]: {self.tokenizer.decode(replaced_labels)}")
 
         (global_step, training_loss, metrics) = trainer.train(resume_from_checkpoint=resume_from_checkpoint)
         self.results.update(metrics)
         trainer.log_metrics("train", metrics)
         trainer.save_metrics("train", metrics)
+        self.model.config.use_cache = True  # enable cache after training
         trainer.save_state()
         self.save_model(model=self.model)
 
@@ -488,11 +522,13 @@ class GptModel:
     def predict(
             self,
             sentences: List[str],
-            keep_prompt: bool = False,
-            add_system_prompt: bool = False,
-            max_length: int = 512,
-            temperature: float = 0.7,
-            repetition_penalty: float = 1.0,
+            skip_prompt: bool = True,
+            prompt_template_name: str = 'vicuna',
+            max_length: int = None,
+            do_sample: bool = None,
+            temperature: float = None,
+            repetition_penalty: float = None,
+            eval_batch_size: int = None,
             **kwargs
     ) -> List[str]:
         """
@@ -500,100 +536,125 @@ class GptModel:
 
         Args:
             sentences: A python list of text (str) to be sent to the model for prediction. Note that the prefix should be prepended to the text.
-            keep_prompt: Whether to keep the prompt in the generated text.
-            add_system_prompt: Whether to add the system prompt to the prompt text.
+            skip_prompt: Whether to skip the prompt when generating text.
+            prompt_template_name: The name of the prompt template to use.
             max_length: The maximum length of the generated text.
-            temperature: The value used to module the next token probabilities.
-            top_p: The cumulative probability of parameter highest probability vocabulary tokens to keep for nucleus sampling.
-            top_k: The number of highest probability vocabulary tokens to keep for top-k-filtering.
             do_sample: Whether or not to use sampling ; use greedy decoding otherwise.
+            temperature: The value used to module the next token probabilities.
             repetition_penalty: The parameter for repetition penalty. 1.0 means no penalty.
-            length_penalty: The parameter that penalizes longer sequences.
-            num_beams: The number of beams to use for beam search. 1 means no beam search.
-            num_return_sequences: The number of independently computed returned sequences for each element in the batch.
+            eval_batch_size: Batch size to use for evaluation.
             **kwargs: Additional arguments for generating sequences.
 
         Returns:
             preds: A python list of the generated sequences.
         """  # noqa: ignore flake8"
 
-        if self.device == 'cpu':
-            self.model.float()
+        self.model.eval()
         if self.args.fp16:
             self.model.half()
-        self.model.eval()
+        prompt_template = get_conv_template(prompt_template_name or self.args.prompt_template_name)
+        if not eval_batch_size:
+            eval_batch_size = self.args.eval_batch_size
 
         all_outputs = []
         # Batching
         for batch in tqdm(
                 [
-                    sentences[i: i + self.args.eval_batch_size]
-                    for i in range(0, len(sentences), self.args.eval_batch_size)
+                    sentences[i: i + eval_batch_size]
+                    for i in range(0, len(sentences), eval_batch_size)
                 ],
                 desc="Generating outputs",
                 disable=self.args.silent,
         ):
-            if add_system_prompt:
-                batch = [PROMPT_DICT['prompt_no_input'].format(instruction=s) for s in batch]
+            if prompt_template_name:
+                batch = [prompt_template.get_prompt(messages=[[s, '']]) for s in batch]
             inputs = self.tokenizer(batch, padding=True, return_tensors='pt')
-            generation_config = GenerationConfig(
-                max_new_tokens=max_length if max_length else self.args.max_length,
+            input_ids = inputs['input_ids'].to(self.device)
+            generation_kwargs = dict(
+                max_new_tokens=max_length if max_length is not None else self.args.max_length,
+                do_sample=do_sample if do_sample is not None else self.args.do_sample,
                 temperature=temperature if temperature is not None else self.args.temperature,
-                repetition_penalty=repetition_penalty if repetition_penalty else self.args.repetition_penalty,
-                return_dict_in_generate=True,
-                output_scores=True,
-                **kwargs,
+                repetition_penalty=repetition_penalty if repetition_penalty is not None else self.args.repetition_penalty,
             )
             outputs = self.model.generate(
-                input_ids=inputs['input_ids'].to(self.device),
-                generation_config=generation_config
+                input_ids=input_ids,
+                **generation_kwargs,
+                **kwargs,
             )
-            for idx, (prompt_text, generated_sequence) in enumerate(zip(batch, outputs.sequences)):
+            for prompt, generated_sequence in zip(batch, outputs):
                 # Decode text
-                text = self.tokenizer.decode(generated_sequence, skip_special_tokens=True)
-                prompt_len = len(prompt_text)
-                gen_text = text[prompt_len:]
-                if keep_prompt:
-                    total_sequence = prompt_text + gen_text
-                else:
-                    total_sequence = gen_text
-                all_outputs.append(total_sequence)
+                prompt_len = len(input_ids[0])
+                generated_sequence = generated_sequence[prompt_len:]
+                gen_text = self.tokenizer.decode(generated_sequence, skip_special_tokens=True)
+                stop_str = self.tokenizer.eos_token or prompt_template.stop_str
+                pos = gen_text.find(stop_str)
+                if pos != -1:
+                    gen_text = gen_text[:pos]
+                if not skip_prompt:
+                    gen_text = prompt + gen_text
+                all_outputs.append(gen_text)
+
         return all_outputs
 
     @torch.inference_mode()
     def chat(
             self,
             query: str,
-            history: List[Tuple[str, str]] = None,
-            keep_prompt: bool = False,
-            add_system_prompt=True,
-            max_length: int = 2048,
+            history: Union[List, List[Tuple[str, str]]] = None,
+            stream: bool = False,
+            skip_prompt: bool = True,
+            prompt_template_name: str = "vicuna",
+            max_new_tokens: int = None,
+            do_sample: bool = None,
+            temperature: float = None,
+            repetition_penalty: float = None,
+            context_len: int = 2048,
             **kwargs
     ):
-        """
-        Chat with the model
-        :param query:
-        :param history:
-        :param keep_prompt:
-        :param max_length:
-        :param add_system_prompt:
-        :param kwargs:
-        :return: response, history
-        """
+        """Chat model with multi turn conversation."""
+        prompt_template = get_conv_template(prompt_template_name or self.args.prompt_template_name)
+
         if history is None:
             history = []
-        if not history:
-            prompt = query
+        history.append([query, ''])
+        prompt = prompt_template.get_prompt(messages=history)
+
+        input_ids = self.tokenizer(prompt).input_ids
+        max_new_tokens = max_new_tokens if max_new_tokens is not None else self.args.max_length
+        max_src_len = context_len - max_new_tokens - 8
+        input_ids = input_ids[-max_src_len:]
+        if stream:
+            streamer = TextIteratorStreamer(
+                self.tokenizer, timeout=60.0, skip_prompt=skip_prompt, skip_special_tokens=True
+            )
+            generation_kwargs = dict(
+                input_ids=torch.as_tensor([input_ids]).to(self.device),
+                max_new_tokens=max_new_tokens,
+                do_sample=do_sample if do_sample is not None else self.args.do_sample,
+                temperature=temperature if temperature is not None else self.args.temperature,
+                repetition_penalty=repetition_penalty if repetition_penalty is not None else self.args.repetition_penalty,
+                streamer=streamer,
+                **kwargs,
+            )
+            thread = Thread(target=self.model.generate, kwargs=generation_kwargs)
+            thread.start()
+            yield from streamer
         else:
-            prompt = ""
-            for i, (q, a) in enumerate(history):
-                prompt += "\n### Human: {}\n### Assistant: {}\n".format(q, a)
-            prompt += "\n### Human: {}\n### Assistant: ".format(query)
-        if add_system_prompt:
-            prompt = PROMPT_DICT['prompt_multi_round_no_input'].format(instruction=prompt, output_text="")
-        response = self.predict([prompt], keep_prompt=keep_prompt, max_length=len(prompt) + max_length, **kwargs)[0]
-        history = history + [(query, response)]
-        return response, history
+            generation_kwargs = dict(
+                max_new_tokens=max_new_tokens if max_new_tokens is not None else self.args.max_length,
+                do_sample=do_sample if do_sample is not None else self.args.do_sample,
+                temperature=temperature if temperature is not None else self.args.temperature,
+                repetition_penalty=repetition_penalty if repetition_penalty is not None else self.args.repetition_penalty,
+            )
+            outputs = self.model.generate(
+                input_ids=torch.as_tensor([input_ids]).to(self.device),
+                **generation_kwargs,
+                **kwargs,
+            )
+            output_tensor = outputs[0][len(input_ids[0]):] if skip_prompt else outputs[0]
+            response = self.tokenizer.decode(output_tensor, skip_special_tokens=True)
+            history[-1][1] = response
+            return response, history
 
     def load_and_cache_examples(
             self, data, evaluate=False, no_cache=False, verbose=True, silent=False
@@ -618,7 +679,7 @@ class GptModel:
             CustomDataset = args.dataset_class
             return CustomDataset(tokenizer, args, data, mode)
         else:
-            return InstructionDataset(tokenizer, args, data, mode)
+            return GptSupervisedDataset(tokenizer, args, data, mode)
 
     def save_model(
             self, output_dir=None, optimizer=None, scheduler=None, model=None, results=None
@@ -633,19 +694,11 @@ class GptModel:
             model_to_save = model.module if hasattr(model, "module") else model
             model_to_save.save_pretrained(output_dir)
             self.tokenizer.save_pretrained(output_dir)
-            torch.save(self.args, os.path.join(output_dir, "training_args.bin"))
-            if optimizer and scheduler and self.args.save_optimizer_and_scheduler:
-                torch.save(
-                    optimizer.state_dict(), os.path.join(output_dir, "optimizer.pt")
-                )
-                torch.save(
-                    scheduler.state_dict(), os.path.join(output_dir, "scheduler.pt")
-                )
-            # save model
+            torch.save(self.args, os.path.join(output_dir, TRAINING_ARGS_NAME))
+            # save model args
             self.save_model_args(output_dir)
 
     def save_model_args(self, output_dir):
-        os.makedirs(output_dir, exist_ok=True)
         self.args.save(output_dir)
 
     def _load_model_args(self, input_dir):

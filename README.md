@@ -15,13 +15,20 @@
 [![License Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![python_version](https://img.shields.io/badge/Python-3.8%2B-green.svg)](requirements.txt)
 [![GitHub issues](https://img.shields.io/github/issues/shibing624/textgen.svg)](https://github.com/shibing624/textgen/issues)
-[![Wechat Group](http://vlog.sfyc.ltd/wechat_everyday/wxgroup_logo.png?imageView2/0/w/60/h/20)](#Contact)
+[![Wechat Group](https://img.shields.io/badge/wechat-group-green.svg?logo=wechat)](#Contact)
 
 ## 📖 Introduction
 
 **TextGen**实现了多种文本生成模型，包括：LLaMA、ChatGLM、UDA、GPT2、Seq2Seq、BART、T5、SongNet等模型，开箱即用。
 
 ## 🔥 News
+
+[2023/11/02] v1.1.2版本: GPT模型支持了[NEFTune](https://github.com/neelsjain/NEFTune)给embedding加噪SFT训练方法，SFT中使用 `--neft_alpha` 参数启用 NEFTune，例如 `--neft_alpha 5`。详见[Release-v1.1.2](https://github.com/shibing624/textgen/releases/tag/1.1.2)
+
+[2023/09/05] v1.1.1版本: 支持多卡推理，推理速度加倍，调库textgen做batch推理，多卡推理更方便、快速。详见[Release-v1.1.1](https://github.com/shibing624/textgen/releases/tag/1.1.1)
+
+[2023/08/23] v1.1.0版本: 发布基于ShareGPT4数据集微调的中英文Vicuna-13B模型[shibing624/vicuna-baichuan-13b-chat](https://huggingface.co/shibing624/vicuna-baichuan-13b-chat)，和对应的LoRA模型[shibing624/vicuna-baichuan-13b-chat-lora](https://huggingface.co/shibing624/vicuna-baichuan-13b-chat-lora)，支持多轮对话，评测效果有提升，详见[Release-v1.1.0](https://github.com/shibing624/textgen/releases/tag/1.1.0)
+
 [2023/08/02] v1.0.2版本: 新增支持ChatGLM2和LLaMA2模型的SFT微调训练，详见[Release-v1.0.2](https://github.com/shibing624/textgen/releases/tag/1.0.2)
 
 [2023/06/15] v1.0.0版本: 新增ChatGLM/LLaMA/Bloom模型的多轮对话微调训练，并发布医疗问诊LoRA模型[shibing624/ziya-llama-13b-medical-lora](https://huggingface.co/shibing624/ziya-llama-13b-medical-lora)。详见[Release-v1.0.0](https://github.com/shibing624/textgen/releases/tag/1.0.0)
@@ -31,9 +38,7 @@
 
 ## 😊 Feature
 
-- [ChatGLM](textgen/chatglm)：本项目基于PyTorch实现了ChatGLM-6B模型LoRA微调训练和预测，可以用于句子纠错、对话等文本生成任务
-- [LLaMA](textgen/llama)：本项目基于PyTorch实现了LLaMA模型LoRA微调训练和预测，可以用于对话生成任务和领域微调训练
-- [BLOOM](textgen/bloom)：本项目基于PyTorch实现了BLOOM模型LoRA微调训练和预测，可以用于对话生成任务和领域微调训练
+- [GPT](textgen/gpt)：本项目基于PyTorch实现了 ChatGLM-6B 1,2,3 / Baichuan 1,2 / LLaMA 1,2 / BLOOM / Mistral / QWen 等GPT模型LoRA微调训练和预测，可以用于对话生成任务和领域微调训练
 - [UDA/EDA](textgen/augment/word_level_augment.py)：本项目实现了UDA(非核心词替换)、EDA和Back Translation(回译)算法，基于TF-IDF将句子中部分不重要词替换为同义词，随机词插入、删除、替换等方法，产生新的文本，实现了文本扩增
 - [Seq2Seq](textgen/seq2seq)：本项目基于PyTorch实现了Seq2Seq、ConvSeq2Seq、BART模型的训练和预测，可以用于文本翻译、对话生成、摘要生成等文本生成任务
 - [T5](textgen/t5)：本项目基于PyTorch实现了T5和CopyT5模型训练和预测，可以用于文本翻译、对话生成、对联生成、文案撰写等文本生成任务
@@ -46,17 +51,18 @@
 release基于`textgen`训练的中文模型，模型已经release到HuggingFace models，指定模型名称`textgen`会自动下载模型，可直接使用。
 
 
-| Model                                                                                                     | Arch       | Introduction                                                                                                                                                                | Train Script                                                                                                                                 | Predict Script                                                                                                        | 
-|:----------------------------------------------------------------------------------------------------------|:-----------|:-------------------------------------------------------------------------------------------------------------------------------------------------------------------------|:---------------------------------------------------------------------------------------------------------------------------------------------|:----------------------------------------------------------------------------------------------------------------------|
-| [shibing624/t5-chinese-couplet](https://huggingface.co/shibing624/t5-chinese-couplet)                     | T5         | fine-tuned中文对联后的模型                                                                                                                                                       | [对联生成模型调研](https://github.com/shibing624/textgen/blob/main/docs/%E5%AF%B9%E8%81%94%E7%94%9F%E6%88%90%E6%A8%A1%E5%9E%8B%E5%AF%B9%E6%AF%94.md) | [predict script](https://github.com/shibing624/textgen/blob/main/examples/t5/t5_couplet_demo.py)                      |
-| [shibing624/songnet-base-chinese-songci](https://huggingface.co/shibing624/songnet-base-chinese-songci)   | SongNet    | fine-tuned宋词后的模型                                                                                                                                                         | [training script](https://github.com/shibing624/textgen/blob/main/examples/songnet/training_zh_songnet_demo.py)                              | [predict script](https://github.com/shibing624/textgen/blob/main/examples/songnet/songnet_songci_demo.py)             |
-| [shibing624/songnet-base-chinese-couplet](https://huggingface.co/shibing624/songnet-base-chinese-couplet) | SongNet    | fine-tuned对联后的模型                                                                                                                                                         | [training script](https://github.com/shibing624/textgen/blob/main/examples/songnet/training_zh_songnet_demo.py)                              | [predict script](https://github.com/shibing624/textgen/blob/main/examples/songnet/songnet_couplet_demo.py)            |
-| [shibing624/chatglm-6b-csc-zh-lora](https://huggingface.co/shibing624/chatglm-6b-csc-zh-lora)             | ChatGLM-6B | 在27万中文拼写纠错数据[shibing624/CSC](https://huggingface.co/datasets/shibing624/CSC)上微调了一版ChatGLM-6B，纠错效果有提升，发布微调后的LoRA权重                                                        | [training script](https://github.com/shibing624/textgen/blob/main/examples/chatglm/training_chatglm_csc_demo.py)                             | [predict script](https://github.com/shibing624/textgen/blob/main/examples/chatglm/csc_demo.py)                        |
-| [shibing624/chatglm-6b-belle-zh-lora](https://huggingface.co/shibing624/chatglm-6b-belle-zh-lora)         | ChatGLM-6B | 在100万条中文ChatGPT指令Belle数据集[BelleGroup/train_1M_CN](https://huggingface.co/datasets/BelleGroup/train_1M_CN)上微调了一版ChatGLM-6B，问答效果有提升，发布微调后的LoRA权重                           | [training script](https://github.com/shibing624/textgen/blob/main/examples/chatglm/training_chatglm_hfdataset_demo.py)                       | [predict script](https://github.com/shibing624/textgen/blob/main/examples/chatglm/training_chatglm_hfdataset_demo.py) |
-| [shibing624/llama-13b-belle-zh-lora](https://huggingface.co/shibing624/llama-13b-belle-zh-lora)           | LLaMA-13B  | 在100万条中文ChatGPT指令Belle数据集[BelleGroup/train_1M_CN](https://huggingface.co/datasets/BelleGroup/train_1M_CN)上微调了一版Llama-13B，问答效果有提升，发布微调后的LoRA权重                            | [training script](https://github.com/shibing624/textgen/blob/main/examples/llama/training_llama_hfdataset_demo.py)                           | [predict script](https://github.com/shibing624/textgen/blob/main/examples/llama/training_llama_hfdataset_demo.py)     |
-| [shibing624/chinese-alpaca-plus-7b-hf](https://huggingface.co/shibing624/chinese-alpaca-plus-7b-hf)       | LLaMA-7B   | [中文LLaMA-Plus, Alpaca-Plus 7B版本](https://github.com/ymcui/Chinese-LLaMA-Alpaca/releases/tag/v3.0)，在LLaMA-7B上扩充了中文词表并继续预训练120G文本（通用领域），在4M指令数据集上微调后得到的中文Alpaca-plus模型     | [training script](https://github.com/shibing624/textgen/blob/main/examples/llama/training_llama_demo.py)                                     | [predict script](https://github.com/shibing624/textgen/blob/main/examples/llama/training_llama_demo.py)               |
-| [shibing624/chinese-alpaca-plus-13b-hf](https://huggingface.co/shibing624/chinese-alpaca-plus-13b-hf)     | LLaMA-13B  | [中文LLaMA-Plus, Alpaca-Plus 13B版本](https://github.com/ymcui/Chinese-LLaMA-Alpaca/releases/tag/v3.1)，在LLaMA-13B上扩充了中文词表并继续预训练120G文本（通用领域），在4.3M指令数据集上微调后得到的中文Alpaca-plus模型 | [training script](https://github.com/shibing624/textgen/blob/main/examples/llama/training_llama_demo.py)                                     | [predict script](https://github.com/shibing624/textgen/blob/main/examples/llama/training_llama_demo.py)               |
-| [shibing624/ziya-llama-13b-medical-lora](https://huggingface.co/shibing624/ziya-llama-13b-medical-lora)     | LLaMA-13B  | 在240万条中英文医疗数据集[shibing624/medical](https://huggingface.co/datasets/shibing624/medical)上微调了一版Ziya-LLaMA-13B模型，医疗问答效果有提升，发布微调后的LoRA权重                                      | [training script](https://github.com/shibing624/textgen/blob/main/examples/llama/training_llama_demo.py)                                     | [predict script](https://github.com/shibing624/textgen/blob/main/examples/llama/training_llama_demo.py)               |
+| Model                                                                                                     | Arch               | Introduction                                                                                                                                                                  | Train Script                                                                                                                                 | Predict Script                                                                                                        | 
+|:----------------------------------------------------------------------------------------------------------|:-------------------|:------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|:---------------------------------------------------------------------------------------------------------------------------------------------|:----------------------------------------------------------------------------------------------------------------------|
+| [shibing624/t5-chinese-couplet](https://huggingface.co/shibing624/t5-chinese-couplet)                     | T5                 | fine-tuned中文对联后的模型                                                                                                                                                            | [对联生成模型调研](https://github.com/shibing624/textgen/blob/main/docs/%E5%AF%B9%E8%81%94%E7%94%9F%E6%88%90%E6%A8%A1%E5%9E%8B%E5%AF%B9%E6%AF%94.md) | [predict script](https://github.com/shibing624/textgen/blob/main/examples/t5/t5_couplet_demo.py)                      |
+| [shibing624/songnet-base-chinese-songci](https://huggingface.co/shibing624/songnet-base-chinese-songci)   | SongNet            | fine-tuned宋词后的模型                                                                                                                                                              | [training script](https://github.com/shibing624/textgen/blob/main/examples/songnet/training_zh_songnet_demo.py)                              | [predict script](https://github.com/shibing624/textgen/blob/main/examples/songnet/songnet_songci_demo.py)             |
+| [shibing624/songnet-base-chinese-couplet](https://huggingface.co/shibing624/songnet-base-chinese-couplet) | SongNet            | fine-tuned对联后的模型                                                                                                                                                              | [training script](https://github.com/shibing624/textgen/blob/main/examples/songnet/training_zh_songnet_demo.py)                              | [predict script](https://github.com/shibing624/textgen/blob/main/examples/songnet/songnet_couplet_demo.py)            |
+| [shibing624/chatglm-6b-csc-zh-lora](https://huggingface.co/shibing624/chatglm-6b-csc-zh-lora)             | ChatGLM-6B         | 在27万中文拼写纠错数据[shibing624/CSC](https://huggingface.co/datasets/shibing624/CSC)上微调了一版ChatGLM-6B，纠错效果有提升，发布微调后的LoRA权重                                                             | [training script](https://github.com/shibing624/textgen/blob/main/examples/chatglm/training_chatglm_csc_demo.py)                             | [predict script](https://github.com/shibing624/textgen/blob/main/examples/chatglm/csc_demo.py)                        |
+| [shibing624/chatglm-6b-belle-zh-lora](https://huggingface.co/shibing624/chatglm-6b-belle-zh-lora)         | ChatGLM-6B         | 在100万条中文ChatGPT指令Belle数据集[BelleGroup/train_1M_CN](https://huggingface.co/datasets/BelleGroup/train_1M_CN)上微调了一版ChatGLM-6B，问答效果有提升，发布微调后的LoRA权重                                | [training script](https://github.com/shibing624/textgen/blob/main/examples/chatglm/training_chatglm_hfdataset_demo.py)                       | [predict script](https://github.com/shibing624/textgen/blob/main/examples/chatglm/training_chatglm_hfdataset_demo.py) |
+| [shibing624/llama-13b-belle-zh-lora](https://huggingface.co/shibing624/llama-13b-belle-zh-lora)           | LLaMA-13B          | 在100万条中文ChatGPT指令Belle数据集[BelleGroup/train_1M_CN](https://huggingface.co/datasets/BelleGroup/train_1M_CN)上微调了一版Llama-13B，问答效果有提升，发布微调后的LoRA权重                                 | [training script](https://github.com/shibing624/textgen/blob/main/examples/llama/training_llama_hfdataset_demo.py)                           | [predict script](https://github.com/shibing624/textgen/blob/main/examples/llama/training_llama_hfdataset_demo.py)     |
+| [shibing624/chinese-alpaca-plus-7b-hf](https://huggingface.co/shibing624/chinese-alpaca-plus-7b-hf)       | LLaMA-7B           | [中文LLaMA-Plus, Alpaca-Plus 7B版本](https://github.com/ymcui/Chinese-LLaMA-Alpaca/releases/tag/v3.0)，在LLaMA-7B上扩充了中文词表并继续预训练120G文本（通用领域），在4M指令数据集上微调后得到的中文Alpaca-plus模型          | [training script](https://github.com/shibing624/textgen/blob/main/examples/gpt/training_llama_demo.py)                                     | [predict script](https://github.com/shibing624/textgen/blob/main/examples/gpt/training_llama_demo.py)               |
+| [shibing624/chinese-alpaca-plus-13b-hf](https://huggingface.co/shibing624/chinese-alpaca-plus-13b-hf)     | LLaMA-13B          | [中文LLaMA-Plus, Alpaca-Plus 13B版本](https://github.com/ymcui/Chinese-LLaMA-Alpaca/releases/tag/v3.1)，在LLaMA-13B上扩充了中文词表并继续预训练120G文本（通用领域），在4.3M指令数据集上微调后得到的中文Alpaca-plus模型      | [training script](https://github.com/shibing624/textgen/blob/main/examples/gpt/training_llama_demo.py)                                     | [predict script](https://github.com/shibing624/textgen/blob/main/examples/gpt/training_llama_demo.py)               |
+| [shibing624/ziya-llama-13b-medical-lora](https://huggingface.co/shibing624/ziya-llama-13b-medical-lora)     | LLaMA-13B          | 在240万条中英文医疗数据集[shibing624/medical](https://huggingface.co/datasets/shibing624/medical)上微调了一版Ziya-LLaMA-13B模型，医疗问答效果有提升，发布微调后的LoRA权重                                           | [training script](https://github.com/shibing624/textgen/blob/main/examples/gpt/training_llama_demo.py)                                     | [predict script](https://github.com/shibing624/textgen/blob/main/examples/gpt/training_llama_demo.py)               |
+| [shibing624/vicuna-baichuan-13b-chat](https://huggingface.co/shibing624/vicuna-baichuan-13b-chat)           | Baichuan-13B-Chat  | 在10万条多语言ShareGPT GPT4多轮对话数据集[shibing624/sharegpt_gpt4](https://huggingface.co/datasets/shibing624/sharegpt_gpt4)上SFT微调了一版baichuan-13b-chat多轮问答模型，日常问答和医疗问答效果有提升，发布微调后的完整模型权重  | [training script](https://github.com/shibing624/textgen/blob/main/examples/gpt/training_llama_demo.py)                                     | [predict script](https://github.com/shibing624/textgen/blob/main/examples/gpt/training_llama_demo.py)               |
 
 ### Evaluation
 
@@ -91,10 +97,10 @@ HuggingFace Demo: https://huggingface.co/spaces/shibing624/chinese-couplet-gener
 
 ![](docs/hf.png)
 
-run example: [examples/gradio_demo.py](examples/gradio_demo.py) to see the demo:
+run example: [examples/T5/gradio_demo.py](examples/T5/gradio_demo.py) to see the demo:
 
 ```shell
-python examples/gradio_demo.py
+python examples/T5/gradio_demo.py
 ```
 
 model trained by [examples/t5/T5_Finetune_Chinese_Couplet.ipynb](https://github.com/shibing624/textgen/blob/main/examples/t5/T5_Finetune_Chinese_Couplet.ipynb)
@@ -121,55 +127,43 @@ python setup.py install
 
 #### 使用 ChatGLM-6B 微调后的模型
 
-example: [examples/chatglm/inference_demo.py](https://github.com/shibing624/textgen/blob/main/examples/chatglm/inference_demo.py)
+example: [examples/gpt/inference_demo.py](https://github.com/shibing624/textgen/blob/main/examples/gpt/inference_demo.py)
 
 ```python
-from textgen import ChatGlmModel
+from textgen import GptModel
 
-model = ChatGlmModel("chatglm", "THUDM/chatglm-6b", peft_name="shibing624/chatglm-6b-csc-zh-lora")
-r = model.predict(["对下面中文拼写纠错：\n少先队员因该为老人让坐。\n答："])
-print(r)  # ['少先队员应该为老人让座。\n错误字：因，坐']
+model = GptModel("chatglm", "THUDM/chatglm-6b", peft_name="shibing624/chatglm-6b-csc-zh-lora")
+r = model.predict(["介绍下北京"])
+print(r)  # ['北京是中国的首都...']
 ```
-
-PS：由于使用了开发中的peft库，可能由于版本更新，导致LoRA模型加载失败，建议使用下面的训练方法，自己训练LoRA模型。
 
 #### 训练 ChatGLM-6B 微调模型
 
-1. 支持自定义训练数据集和训练参数，数据集格式参考[examples/data/zh_csc_test.tsv](https://github.com/shibing624/textgen/blob/main/examples/data/zh_csc_test.tsv)或者[examples/data/json_files/belle_10.json](https://github.com/shibing624/textgen/blob/main/examples/data/json_files/belle_10.json)
-2. 支持AdaLoRA、LoRA、P_Tuning、Prefix_Tuning等部分参数微调方法，也支持全参微调
+1. 支持自定义训练数据集和训练参数，数据集格式参考[examples/data/sharegpt_zh_100_format.jsonl](https://github.com/shibing624/textgen/blob/main/examples/data/sharegpt_zh_100_format.jsonl)
+2. 支持QLoRA、AdaLoRA、LoRA、P_Tuning、Prefix_Tuning等部分参数微调方法，也支持全参微调
 3. 支持多卡训练，支持混合精度训练
+4. 支持多卡推理
 
-example: [examples/chatglm/training_chatglm_demo.py](https://github.com/shibing624/textgen/blob/main/examples/chatglm/training_chatglm_demo.py)
+example: [examples/gpt/training_chatglm_demo.py](https://github.com/shibing624/textgen/blob/main/examples/gpt/training_chatglm_demo.py)
 
 单卡训练：
 ```shell
-cd examples/chatglm
-CUDA_VISIBLE_DEVICES=0 python training_chatglm_demo.py --do_train --do_predict --num_epochs 1 --output_dir outputs_chatglm
+cd examples/gpt
+CUDA_VISIBLE_DEVICES=0 python training_chatglm_demo.py --do_train --do_predict --num_epochs 1 --output_dir outputs_chatglm_v1
 ```
 
 多卡训练：
 ```shell
-cd examples/chatglm
-CUDA_VISIBLE_DEVICES=0,1 torchrun --nproc_per_node 2 training_chatglm_demo.py --do_train --do_predict --num_epochs 20
+cd examples/gpt
+CUDA_VISIBLE_DEVICES=0,1 torchrun --nproc_per_node 2 training_chatglm_demo.py --do_train --do_predict --num_epochs 20 --output_dir outputs_chatglm_v1
 ```
 
-
-#### 基于微调(LoRA)模型继续训练
-如果需要基于Lora模型继续训练，可以使用下面的脚本合并模型为新的base model，再微调训练即可。
-
-执行以下命令：
+多卡推理：
 ```shell
-python -m textgen/chatglm/merge_peft_adapter.py \
-    --base_model_name_or_path path_to_original_base_model_dir \
-    --peft_model_path path_to_peft_model_dir \
-    --output_dir path_to_output_dir 
+cd examples/gpt
+CUDA_VISIBLE_DEVICES=0,1 torchrun --nproc_per_node 2 inference_multigpu_demo.py --model_type chatglm --base_model THUDM/chatglm-6b
 ```
-参数说明：
-```
---base_model_name_or_path：存放HF格式的底座模型权重和配置文件的目录
---peft_model_path：存放PEFT格式的微调模型权重和配置文件的目录
---output_dir：指定保存全量模型权重的目录，默认为./merged
-```
+
 
 ### LLaMA 模型
 
@@ -186,57 +180,45 @@ import sys
 sys.path.append('../..')
 from textgen import GptModel
 
-
-def generate_prompt(instruction):
-  return f"""Below is an instruction that describes a task. Write a response that appropriately completes the request.\n\n### Instruction:{instruction}\n\n### Response:"""
-
-
 model = GptModel("llama", "decapoda-research/llama-7b-hf", peft_name="ziqingyang/chinese-alpaca-lora-7b")
-predict_sentence = generate_prompt("问：用一句话描述地球为什么是独一无二的。\n答：")
-r = model.predict([predict_sentence])
+r = model.predict(["用一句话描述地球为什么是独一无二的。"])
 print(r)  # ['地球是唯一一颗拥有生命的行星。']
 ```
 
 </details>
 
 #### 训练 LLaMA 微调模型
-1. 支持自定义训练数据集和训练参数，数据集格式参考[examples/data/zh_csc_test.tsv](https://github.com/shibing624/textgen/blob/main/examples/data/zh_csc_test.tsv)或者[shibing624/alpaca-zh](https://huggingface.co/datasets/shibing624/alpaca-zh)
-2. 支持AdaLoRA、LoRA、P_Tuning、Prefix_Tuning等部分参数微调方法，也支持全参微调
+1. 支持自定义训练数据集和训练参数，数据集格式参考[examples/data/sharegpt_zh_100_format.jsonl](https://github.com/shibing624/textgen/blob/main/examples/data/sharegpt_zh_100_format.jsonl)
+2. 支持QLoRA、AdaLoRA、LoRA、P_Tuning、Prefix_Tuning等部分参数微调方法，也支持全参微调
 3. 支持多卡训练，支持混合精度训练，使用方法同上（ChatGLM多卡训练）
+4. 支持多卡推理
 
-example: [examples/llama/training_llama_demo.py](https://github.com/shibing624/textgen/blob/main/examples/llama/training_llama_demo.py)
+example: [examples/gpt/training_llama_demo.py](https://github.com/shibing624/textgen/blob/main/examples/gpt/training_llama_demo.py)
 
 
 #### 基于微调(LoRA)模型继续训练
 如果需要基于Lora模型继续训练，可以使用下面的脚本合并模型为新的base model，再微调训练即可。
 
-单LoRA权重合并（适用于 Chinese-LLaMA, Chinese-LLaMA-Plus, Chinese-Alpaca）
-
 执行以下命令：
 ```shell
-python -m textgen/gpt/merge_peft_adapter.py \
-    --base_model_name_or_path path_to_original_base_model_dir \
-    --peft_model_path path_to_chinese_llama_or_alpaca_lora \
-    --output_type [pth|huggingface]
-    --output_dir path_to_output_dir 
+python -m textgen/gpt/merge_peft_adapter \
+    --model_type llama \
+    --base_model_name_or_path path/to/llama/model \
+    --tokenizer_path path/to/llama/tokenizer \
+    --peft_model_path path/to/lora/model \
+    --output_dir merged
 ```
 参数说明：
 ```
+--model_type：模型类型，目前支持bloom,llama,baichuan和chatglm
 --base_model_name_or_path：存放HF格式的底座模型权重和配置文件的目录
+--tokenizer_path：存放HF格式的底座模型tokenizer文件的目录
 --peft_model_path：中文LLaMA/Alpaca LoRA解压后文件所在目录，也可使用HF上的Lora模型名称，如`ziqingyang/chinese-alpaca-lora-7b`会自动下载对应模型
---output_type: 指定输出格式，可为pth或huggingface。若不指定，默认为huggingface
 --output_dir：指定保存全量模型权重的目录，默认为./merged
---offload_dir（可选）：对于低内存用户需要指定一个offload缓存路径
 ```
 
 #### 训练领域模型
 Note: 为了全面的介绍训练医疗大模型的过程，把4阶段训练方法(Pretraining, Supervised Finetuning, Reward Modeling and Reinforcement Learning)单独新建了一个repo：[shibing624/MedicalGPT](https://github.com/shibing624/MedicalGPT)，请移步该repo查看训练方法。
-
-### BLOOM 模型
-
-#### 训练 BLOOM 微调模型
-
-example: [examples/bloom/training_bloom_demo.py](https://github.com/shibing624/textgen/blob/main/examples/bloom/training_bloom_demo.py)
 
 ### ConvSeq2Seq 模型
 
